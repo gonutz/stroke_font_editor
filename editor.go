@@ -12,6 +12,11 @@ func main() {
 	)
 	mode := idle
 
+	const (
+		keyHideControlPoints = draw.KeyTab
+		keyHideBaseLine      = draw.KeySpace
+	)
+
 	var (
 		letter     rune
 		shape      strokes
@@ -21,9 +26,9 @@ func main() {
 	)
 
 	shape = strokes{
-		stroke{typ: dot, x1: 0.1, y1: 0.2},
-		stroke{typ: line, x1: 0.1, y1: 0.1, x2: 0.9, y2: 0.9},
-		stroke{typ: curve, x1: 0.15, y1: 0.2, x2: 0.9, y2: 0.5, x3: 0.95, y3: 0.8},
+	//stroke{typ: dot, x1: 0.1, y1: 0.2},
+	//stroke{typ: line, x1: 0.1, y1: 0.1, x2: 0.9, y2: 0.9},
+	//stroke{typ: curve, x1: 0.15, y1: 0.2, x2: 0.9, y2: 0.5, x3: 0.95, y3: 0.8},
 	}
 
 	const windowW, windowH = 960, 800
@@ -148,8 +153,10 @@ func main() {
 						}
 					}
 				}
-				window.FillRect(sx-m, sy-m, 1+2*m, 1+2*m, fill)
-				window.DrawRect(sx-m-1, sy-m-1, 3+2*m, 3+2*m, outline)
+				if !window.IsKeyDown(keyHideControlPoints) {
+					window.FillRect(sx-m, sy-m, 1+2*m, 1+2*m, fill)
+					window.DrawRect(sx-m-1, sy-m-1, 3+2*m, 3+2*m, outline)
+				}
 			}
 			p(&stroke.x1, &stroke.y1)
 			if stroke.typ != dot {
@@ -161,13 +168,15 @@ func main() {
 		}
 
 		// draw base line
-		window.DrawLine(
-			canvasMin,
-			toScreen(2.0/3.0),
-			canvasMin+canvasSize,
-			toScreen(2.0/3.0),
-			draw.Purple,
-		)
+		if !window.IsKeyDown(keyHideControlPoints) {
+			window.DrawLine(
+				canvasMin,
+				toScreen(2.0/3.0),
+				canvasMin+canvasSize,
+				toScreen(2.0/3.0),
+				draw.Purple,
+			)
+		}
 
 		// draw letter
 		for _, stroke := range shape {
