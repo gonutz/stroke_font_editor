@@ -16,12 +16,12 @@ func main() {
 	var shape strokes
 
 	shape = strokes{
-		stroke{typ: dot, x1: 0.1, y1: 0.2},
-		stroke{typ: line, x1: 0.1, y1: 0.1, x2: 0.9, y2: 0.9},
-		stroke{typ: curve, x1: 0.15, y1: 0.2, x2: 0.9, y2: 0.5, x3: 0.95, y3: 0.8},
+	//stroke{typ: dot, x1: 0.1, y1: 0.2},
+	//stroke{typ: line, x1: 0.1, y1: 0.1, x2: 0.9, y2: 0.9},
+	//stroke{typ: curve, x1: 0.15, y1: 0.2, x2: 0.9, y2: 0.5, x3: 0.95, y3: 0.8},
 	}
 
-	const windowW, windowH = 1000, 800
+	const windowW, windowH = 960, 800
 	check(draw.RunWindow("Stroke Font Editor", windowW, windowH, func(window draw.Window) {
 		if window.WasKeyPressed(draw.KeyEscape) {
 			window.Close()
@@ -71,12 +71,36 @@ func main() {
 			windowW-buttonW-10, 10,
 			draw.White,
 		)
+		if button("New Dot", windowW-buttonW-10, 120) {
+			shape = append(shape, stroke{typ: dot, x1: 0, y1: 0})
+		}
+		if button("New Line", windowW-buttonW-10, 165) {
+			shape = append(shape, stroke{typ: line, x1: 0, y1: 0, x2: 0.1, y2: 0})
+		}
+		if button("New Curve", windowW-buttonW-10, 210) {
+			shape = append(shape, stroke{typ: curve,
+				x1: 0, y1: 0,
+				x2: 0.1, y2: 0.1,
+				x3: 0.2, y3: 0,
+			})
+		}
 
 		// draw the current letter
 		const canvasMin, canvasSize = 10, windowH - 20
 		toScreen := func(t float64) int {
 			return int(canvasMin + canvasSize*t + 0.5)
 		}
+		fromScreen := func(s int) float64 {
+			d := s - canvasMin
+			if d < 0 {
+				d = 0
+			}
+			if d > canvasSize-1 {
+				d = canvasSize - 1
+			}
+			return float64(d) / (canvasSize - 1)
+		}
+		_ = fromScreen // TODO
 
 		// clear background
 		window.FillRect(canvasMin, canvasMin, canvasSize, canvasSize, draw.White)
@@ -87,15 +111,22 @@ func main() {
 			toScreen(2.0/3.0),
 			canvasMin+canvasSize,
 			toScreen(2.0/3.0),
-			draw.Red,
+			draw.Purple,
 		)
 
 		// draw draggable control points
 		for _, stroke := range shape {
 			p := func(x, y float64) {
+				const m = 10
 				sx, sy := toScreen(x), toScreen(y)
-				window.FillRect(sx-3, sy-3, 7, 7, draw.RGB(1, 0.8, 0.8))
-				window.DrawRect(sx-4, sy-4, 9, 9, draw.RGB(1, 0.5, 0.5))
+				fill, outline := draw.RGB(1, 0.8, 0.8), draw.RGB(1, 0.5, 0.5)
+				mx, my := window.MousePosition()
+				if mx >= sx-m-1 && my >= sy-m-1 &&
+					mx < sx-m+2+2*m && my < sy-m+2+2*m {
+					fill, outline = draw.RGB(0.8, 1, 0.8), draw.RGB(0.5, 1, 0.5)
+				}
+				window.FillRect(sx-m, sy-m, 1+2*m, 1+2*m, fill)
+				window.DrawRect(sx-m-1, sy-m-1, 3+2*m, 3+2*m, outline)
 			}
 			p(stroke.x1, stroke.y1)
 			if stroke.typ != dot {
@@ -147,6 +178,14 @@ func main() {
 				panic("wat? " + stroke.typ)
 			}
 		}
+
+		window.DrawRect(
+			canvasMin-1,
+			canvasMin-1,
+			canvasSize+2,
+			canvasSize+2,
+			draw.Purple,
+		)
 	}))
 }
 
