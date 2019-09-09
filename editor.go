@@ -15,10 +15,20 @@ func main() {
 
 	const (
 		keyHideControlPoints = draw.KeyTab
-		keyHideBaseLine      = draw.KeySpace
+		keyHideBaseLine      = draw.KeyTab
+		keyHideFrame         = draw.KeyTab
 	)
 
-	const penSize = 33
+	type penShape string
+	const (
+		rectangular penShape = "rect"
+		circular    penShape = "round"
+	)
+
+	pen := circular
+	penSize := 1
+	const penSizeChangeTimeOut = 4
+	penSizeChangeTime := 0
 
 	var (
 		letter     rune
@@ -44,7 +54,15 @@ func main() {
 			curX, curY = nil, nil
 		}
 
-		pen := window.FillEllipse
+		drawDot := window.FillEllipse
+		if pen == rectangular {
+			drawDot = window.FillRect
+		}
+
+		penSizeChangeTime--
+		if penSizeChangeTime < 0 {
+			penSizeChangeTime = -1
+		}
 
 		const buttonW, buttonH = 150, 30
 		button := func(text string, x, y int) bool {
@@ -81,27 +99,92 @@ func main() {
 			return
 		}
 
-		if button("Change Letter", windowW-buttonW-10, 50) {
+		if button("Change Letter", windowW-buttonW-10, 40) {
 			mode = waitingForChar
 			return
 		}
 		window.DrawText(
-			"Letter: "+str(letter)+" ("+string(letter)+")",
+			"Letter: "+fmt.Sprint(letter)+" ("+string(letter)+")",
 			windowW-buttonW-10, 10,
 			draw.White,
 		)
-		if button("New Dot", windowW-buttonW-10, 120) {
+		if button("New Dot", windowW-buttonW-10, 140) {
 			shape = append(shape, stroke{typ: dot, x1: 0, y1: 0})
 		}
-		if button("New Line", windowW-buttonW-10, 165) {
+		if button("New Line", windowW-buttonW-10, 185) {
 			shape = append(shape, stroke{typ: line, x1: 0, y1: 0, x2: 0.1, y2: 0})
 		}
-		if button("New Curve", windowW-buttonW-10, 210) {
+		if button("New Curve", windowW-buttonW-10, 230) {
 			shape = append(shape, stroke{typ: curve,
 				x1: 0, y1: 0,
 				x2: 0.1, y2: 0.1,
 				x3: 0.2, y3: 0,
 			})
+		}
+
+		if pen == rectangular {
+			if button("Round Pen", windowW-buttonW-10, 345) {
+				pen = circular
+			}
+		} else {
+			if button("Rect Pen", windowW-buttonW-10, 345) {
+				pen = rectangular
+			}
+		}
+
+		// draw pen size controls
+		{
+			window.DrawText(
+				fmt.Sprintf("Pen Size %d", penSize),
+				windowW-buttonW-10+buttonH, 390,
+				draw.White,
+			)
+			top := 420
+			{
+				x := windowW - buttonW - 10
+				y := top
+				tw, th := window.GetTextSize("-")
+				mx, my := window.MousePosition()
+				fill := draw.White
+				if mx >= x && my >= y && mx < x+buttonH && my < y+buttonH {
+					fill = draw.LightGray
+					if window.IsMouseDown(draw.LeftButton) && penSizeChangeTime < 0 {
+						penSize--
+						if penSize < 1 {
+							penSize = 1
+						}
+						penSizeChangeTime = penSizeChangeTimeOut
+					}
+				}
+				window.FillRect(x, y, buttonH, buttonH, fill)
+				window.DrawText("-", x+(buttonH-tw)/2, y+(buttonH-th)/2, draw.Black)
+			}
+			{
+				x := windowW - 10 - buttonH
+				y := top
+				tw, th := window.GetTextSize("+")
+				mx, my := window.MousePosition()
+				fill := draw.White
+				if mx >= x && my >= y && mx < x+buttonH && my < y+buttonH {
+					fill = draw.LightGray
+					if window.IsMouseDown(draw.LeftButton) && penSizeChangeTime < 0 {
+						penSize++
+						penSizeChangeTime = penSizeChangeTimeOut
+					}
+				}
+				window.FillRect(x, y, buttonH, buttonH, fill)
+				window.DrawText("+", x+(buttonH-tw)/2, y+(buttonH-th)/2, draw.Black)
+			}
+			{
+				y := top + (buttonH-penSize)/2
+				if penSize > buttonH {
+					y = top
+				}
+				left := windowW - buttonW - 10 + buttonH
+				right := windowW - 10 - buttonH
+				x := left + (right-left-penSize)/2
+				drawDot(x, y, penSize, penSize, draw.White)
+			}
 		}
 
 		// draw the current letter
@@ -119,7 +202,6 @@ func main() {
 			}
 			return float64(d) / (canvasSize - 1)
 		}
-		_ = fromScreen // TODO
 
 		// clear background
 		window.FillRect(canvasMin, canvasMin, canvasSize, canvasSize, draw.White)
@@ -135,7 +217,7 @@ func main() {
 			stroke := &shape[i]
 			p := func(px, py *float64) {
 				x, y := *px, *py
-				const m = penSize + 10
+				m := penSize + 10
 				sx, sy := toScreen(x), toScreen(y)
 				fill, outline := draw.RGB(1, 0.8, 0.8), draw.RGB(1, 0.5, 0.5)
 				mx, my := window.MousePosition()
@@ -173,7 +255,7 @@ func main() {
 		}
 
 		// draw base line
-		if !window.IsKeyDown(keyHideControlPoints) {
+		if !window.IsKeyDown(keyHideBaseLine) {
 			window.DrawLine(
 				canvasMin,
 				toScreen(2.0/3.0),
@@ -188,7 +270,7 @@ func main() {
 			switch stroke.typ {
 			case dot:
 				x, y := toScreen(stroke.x1), toScreen(stroke.y1)
-				pen(x-penSize/2, y-penSize/2, penSize, penSize, draw.Black)
+				drawDot(x-penSize/2, y-penSize/2, penSize, penSize, draw.Black)
 			case line:
 				step := 1.0 / (canvasSize * math.Hypot(stroke.x1-stroke.x2, stroke.y1-stroke.y2))
 				curT := 0.0
@@ -200,7 +282,7 @@ func main() {
 					}
 					x := toScreen(stroke.x1*t + (1-t)*stroke.x2)
 					y := toScreen(stroke.y1*t + (1-t)*stroke.y2)
-					pen(x-penSize/2, y-penSize/2, penSize, penSize, draw.Black)
+					drawDot(x-penSize/2, y-penSize/2, penSize, penSize, draw.Black)
 					if curT >= 1 {
 						break
 					}
@@ -223,23 +305,25 @@ func main() {
 					x, y := interp(t)
 					sx := toScreen(x)
 					sy := toScreen(y)
-					pen(sx-penSize/2, sy-penSize/2, penSize, penSize, draw.Black)
+					drawDot(sx-penSize/2, sy-penSize/2, penSize, penSize, draw.Black)
 					if curT >= 1 {
 						break
 					}
 				}
 			default:
-				panic("wat? " + stroke.typ)
+				panic("wat stroke type? " + stroke.typ)
 			}
 		}
 
-		window.DrawRect(
-			canvasMin-1,
-			canvasMin-1,
-			canvasSize+2,
-			canvasSize+2,
-			draw.Purple,
-		)
+		if !window.IsKeyDown(keyHideFrame) {
+			window.DrawRect(
+				canvasMin-1,
+				canvasMin-1,
+				canvasSize+2,
+				canvasSize+2,
+				draw.Purple,
+			)
+		}
 	}))
 }
 
@@ -247,10 +331,6 @@ func check(err error) {
 	if err != nil {
 		panic(err)
 	}
-}
-
-func str(x interface{}) string {
-	return fmt.Sprint(x)
 }
 
 type strokes []stroke
