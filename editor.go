@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"github.com/gonutz/prototype/draw"
+	"math"
 )
 
 func main() {
@@ -17,6 +18,8 @@ func main() {
 		keyHideBaseLine      = draw.KeySpace
 	)
 
+	const penSize = 33
+
 	var (
 		letter     rune
 		shape      strokes
@@ -26,9 +29,9 @@ func main() {
 	)
 
 	shape = strokes{
-	//stroke{typ: dot, x1: 0.1, y1: 0.2},
-	//stroke{typ: line, x1: 0.1, y1: 0.1, x2: 0.9, y2: 0.9},
-	//stroke{typ: curve, x1: 0.15, y1: 0.2, x2: 0.9, y2: 0.5, x3: 0.95, y3: 0.8},
+		stroke{typ: dot, x1: 0.1, y1: 0.2},
+		stroke{typ: line, x1: 0.1, y1: 0.1, x2: 0.9, y2: 0.9},
+		stroke{typ: curve, x1: 0.15, y1: 0.2, x2: 0.9, y2: 0.5, x3: 0.95, y3: 0.8},
 	}
 
 	const windowW, windowH = 960, 800
@@ -40,6 +43,8 @@ func main() {
 		if !window.IsMouseDown(draw.LeftButton) {
 			curX, curY = nil, nil
 		}
+
+		pen := window.FillEllipse
 
 		const buttonW, buttonH = 150, 30
 		button := func(text string, x, y int) bool {
@@ -130,7 +135,7 @@ func main() {
 			stroke := &shape[i]
 			p := func(px, py *float64) {
 				x, y := *px, *py
-				const m = 10
+				const m = penSize + 10
 				sx, sy := toScreen(x), toScreen(y)
 				fill, outline := draw.RGB(1, 0.8, 0.8), draw.RGB(1, 0.5, 0.5)
 				mx, my := window.MousePosition()
@@ -182,38 +187,46 @@ func main() {
 		for _, stroke := range shape {
 			switch stroke.typ {
 			case dot:
-				window.DrawPoint(
-					toScreen(stroke.x1), toScreen(stroke.y1),
-					draw.Black,
-				)
+				x, y := toScreen(stroke.x1), toScreen(stroke.y1)
+				pen(x-penSize/2, y-penSize/2, penSize, penSize, draw.Black)
 			case line:
-				window.DrawLine(
-					toScreen(stroke.x1), toScreen(stroke.y1),
-					toScreen(stroke.x2), toScreen(stroke.y2),
-					draw.Black,
-				)
-			case curve:
-				interp := func(t float64) (sx, sy int) {
-					tt := 1.0 - t
-					x := tt*tt*stroke.x1 + 2*tt*t*stroke.x2 + t*t*stroke.x3
-					y := tt*tt*stroke.y1 + 2*tt*t*stroke.y2 + t*t*stroke.y3
-					return toScreen(x), toScreen(y)
-				}
-				lastX, lastY := interp(0)
-				const step = 0.01
-				curT := step
+				step := 1.0 / (canvasSize * math.Hypot(stroke.x1-stroke.x2, stroke.y1-stroke.y2))
+				curT := 0.0
 				for {
 					t := curT
+					curT += step
+					if t > 1 {
+						t = 1
+					}
+					x := toScreen(stroke.x1*t + (1-t)*stroke.x2)
+					y := toScreen(stroke.y1*t + (1-t)*stroke.y2)
+					pen(x-penSize/2, y-penSize/2, penSize, penSize, draw.Black)
+					if curT >= 1 {
+						break
+					}
+				}
+			case curve:
+				interp := func(t float64) (x, y float64) {
+					tt := 1.0 - t
+					x = tt*tt*stroke.x1 + 2*tt*t*stroke.x2 + t*t*stroke.x3
+					y = tt*tt*stroke.y1 + 2*tt*t*stroke.y2 + t*t*stroke.y3
+					return
+				}
+				step := 0.5 / (canvasSize * math.Hypot(stroke.x1-stroke.x3, stroke.y1-stroke.y3))
+				curT := 0.0
+				for {
+					t := curT
+					curT += step
 					if t > 1 {
 						t = 1
 					}
 					x, y := interp(t)
-					window.DrawLine(lastX, lastY, x, y, draw.Black)
-					lastX, lastY = x, y
+					sx := toScreen(x)
+					sy := toScreen(y)
+					pen(sx-penSize/2, sy-penSize/2, penSize, penSize, draw.Black)
 					if curT >= 1 {
 						break
 					}
-					curT += step
 				}
 			default:
 				panic("wat? " + stroke.typ)
