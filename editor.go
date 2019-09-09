@@ -12,19 +12,28 @@ func main() {
 	)
 	mode := idle
 
-	var letter rune
-	var shape strokes
+	var (
+		letter     rune
+		shape      strokes
+		curX, curY *float64
+		curMouseDx int
+		curMouseDy int
+	)
 
 	shape = strokes{
-	//stroke{typ: dot, x1: 0.1, y1: 0.2},
-	//stroke{typ: line, x1: 0.1, y1: 0.1, x2: 0.9, y2: 0.9},
-	//stroke{typ: curve, x1: 0.15, y1: 0.2, x2: 0.9, y2: 0.5, x3: 0.95, y3: 0.8},
+		stroke{typ: dot, x1: 0.1, y1: 0.2},
+		stroke{typ: line, x1: 0.1, y1: 0.1, x2: 0.9, y2: 0.9},
+		stroke{typ: curve, x1: 0.15, y1: 0.2, x2: 0.9, y2: 0.5, x3: 0.95, y3: 0.8},
 	}
 
 	const windowW, windowH = 960, 800
 	check(draw.RunWindow("Stroke Font Editor", windowW, windowH, func(window draw.Window) {
 		if window.WasKeyPressed(draw.KeyEscape) {
 			window.Close()
+		}
+
+		if !window.IsMouseDown(draw.LeftButton) {
+			curX, curY = nil, nil
 		}
 
 		const buttonW, buttonH = 150, 30
@@ -105,6 +114,52 @@ func main() {
 		// clear background
 		window.FillRect(canvasMin, canvasMin, canvasSize, canvasSize, draw.White)
 
+		if curX != nil && curY != nil {
+			mx, my := window.MousePosition()
+			sx, sy := mx-curMouseDx, my-curMouseDy
+			*curX, *curY = fromScreen(sx), fromScreen(sy)
+		}
+
+		// draw draggable control points
+		for i := range shape {
+			stroke := &shape[i]
+			p := func(px, py *float64) {
+				x, y := *px, *py
+				const m = 10
+				sx, sy := toScreen(x), toScreen(y)
+				fill, outline := draw.RGB(1, 0.8, 0.8), draw.RGB(1, 0.5, 0.5)
+				mx, my := window.MousePosition()
+				contains := func(x, y int) bool {
+					return x >= sx-m-1 && y >= sy-m-1 &&
+						x < sx-m+2+2*m && y < sy-m+2+2*m
+				}
+				if contains(mx, my) {
+					fill, outline = draw.RGB(0.8, 1, 0.8), draw.RGB(0.5, 1, 0.5)
+					// if nothing is selected and the mouse was clicked on this
+					// control point, make it current
+					if curX == nil && curY == nil &&
+						window.IsMouseDown(draw.LeftButton) {
+						for _, c := range window.Clicks() {
+							if c.Button == draw.LeftButton && contains(c.X, c.Y) {
+								curX, curY = px, py
+								curMouseDx = mx - sx
+								curMouseDy = my - sy
+							}
+						}
+					}
+				}
+				window.FillRect(sx-m, sy-m, 1+2*m, 1+2*m, fill)
+				window.DrawRect(sx-m-1, sy-m-1, 3+2*m, 3+2*m, outline)
+			}
+			p(&stroke.x1, &stroke.y1)
+			if stroke.typ != dot {
+				p(&stroke.x2, &stroke.y2)
+			}
+			if stroke.typ == curve {
+				p(&stroke.x3, &stroke.y3)
+			}
+		}
+
 		// draw base line
 		window.DrawLine(
 			canvasMin,
@@ -113,29 +168,6 @@ func main() {
 			toScreen(2.0/3.0),
 			draw.Purple,
 		)
-
-		// draw draggable control points
-		for _, stroke := range shape {
-			p := func(x, y float64) {
-				const m = 10
-				sx, sy := toScreen(x), toScreen(y)
-				fill, outline := draw.RGB(1, 0.8, 0.8), draw.RGB(1, 0.5, 0.5)
-				mx, my := window.MousePosition()
-				if mx >= sx-m-1 && my >= sy-m-1 &&
-					mx < sx-m+2+2*m && my < sy-m+2+2*m {
-					fill, outline = draw.RGB(0.8, 1, 0.8), draw.RGB(0.5, 1, 0.5)
-				}
-				window.FillRect(sx-m, sy-m, 1+2*m, 1+2*m, fill)
-				window.DrawRect(sx-m-1, sy-m-1, 3+2*m, 3+2*m, outline)
-			}
-			p(stroke.x1, stroke.y1)
-			if stroke.typ != dot {
-				p(stroke.x2, stroke.y2)
-			}
-			if stroke.typ == curve {
-				p(stroke.x3, stroke.y3)
-			}
-		}
 
 		// draw letter
 		for _, stroke := range shape {
