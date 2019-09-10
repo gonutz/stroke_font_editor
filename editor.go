@@ -42,11 +42,12 @@ func main() {
 	useGrid := true
 
 	var (
-		letter     rune
-		shape      strokes
-		curX, curY *float64
-		curMouseDx int
-		curMouseDy int
+		letter              rune
+		shape               strokes
+		curX, curY          *float64
+		curMouseDx          int
+		curMouseDy          int
+		mouseInDeletionArea bool
 	)
 
 	lastPath := filepath.Join(os.Getenv("APPDATA"), "stroke_font_editor.stf")
@@ -88,6 +89,17 @@ func main() {
 		}
 
 		if !window.IsMouseDown(draw.LeftButton) {
+			if mouseInDeletionArea && curX != nil && curY != nil {
+				for s := range shape {
+					if curX == &shape[s].x1 ||
+						curX == &shape[s].x2 ||
+						curX == &shape[s].x3 {
+						copy(shape[s:], shape[s+1:])
+						shape = shape[:len(shape)-1]
+						break
+					}
+				}
+			}
 			curX, curY = nil, nil
 		}
 
@@ -252,6 +264,17 @@ func main() {
 				x := left + (right-left-penSize)/2
 				drawDot(x, y, penSize, penSize, draw.White)
 			}
+		}
+
+		// deletion area
+		{
+			x, y := windowW-10-buttonW, windowH-10-buttonW
+			window.FillRect(x, y, buttonW, buttonW, draw.DarkRed)
+			text := "Drag here\nto delete\nsomething"
+			tw, th := window.GetTextSize(text)
+			window.DrawText(text, x+(buttonW-tw)/2, y+(buttonW-th)/2, draw.White)
+			mx, my := window.MousePosition()
+			mouseInDeletionArea = mx >= x && my >= y && mx < x+buttonW && my < y+buttonW
 		}
 
 		// draw the current letter
