@@ -13,11 +13,10 @@ func main() {
 	)
 	mode := idle
 
-	const (
-		keyHideControlPoints = draw.KeyTab
-		keyHideBaseLine      = draw.KeyTab
-		keyHideFrame         = draw.KeyTab
-	)
+	hideControlPoints := false
+	hideBaseLine := false
+	hideFrame := false
+	hideGrid := false
 
 	type penShape string
 	const (
@@ -30,6 +29,10 @@ func main() {
 	const penSizeChangeTimeOut = 4
 	penSizeChangeTime := 0
 
+	const baseLine = 2.0 / 3.0
+	gridSize := 0.1
+	useGrid := true
+
 	var (
 		letter     rune
 		shape      strokes
@@ -37,12 +40,6 @@ func main() {
 		curMouseDx int
 		curMouseDy int
 	)
-
-	shape = strokes{
-		stroke{typ: dot, x1: 0.1, y1: 0.2},
-		stroke{typ: line, x1: 0.1, y1: 0.1, x2: 0.9, y2: 0.9},
-		stroke{typ: curve, x1: 0.15, y1: 0.2, x2: 0.9, y2: 0.5, x3: 0.95, y3: 0.8},
-	}
 
 	const windowW, windowH = 960, 800
 	check(draw.RunWindow("Stroke Font Editor", windowW, windowH, func(window draw.Window) {
@@ -122,6 +119,13 @@ func main() {
 			})
 		}
 
+		if window.WasKeyPressed(draw.KeyTab) {
+			hideControlPoints = !hideControlPoints
+			hideBaseLine = !hideBaseLine
+			hideFrame = !hideFrame
+			hideGrid = !hideGrid
+		}
+
 		if pen == rectangular {
 			if button("Round Pen", windowW-buttonW-10, 345) {
 				pen = circular
@@ -129,6 +133,29 @@ func main() {
 		} else {
 			if button("Rect Pen", windowW-buttonW-10, 345) {
 				pen = rectangular
+			}
+		}
+
+		if window.WasKeyPressed(draw.KeyG) {
+			useGrid = !useGrid
+		}
+		if window.WasKeyPressed(draw.KeyNumAdd) {
+			n := int(1.0/gridSize + 0.5)
+			gridSize = 1.0 / float64(n+1)
+		}
+		if window.WasKeyPressed(draw.KeyNumSubtract) {
+			n := int(1.0/gridSize + 0.5)
+			if n-1 > 0 {
+				gridSize = 1.0 / float64(n-1)
+			}
+		}
+		if window.WasKeyPressed(draw.KeyNumMultiply) {
+			gridSize /= 2
+		}
+		if window.WasKeyPressed(draw.KeyNumDivide) {
+			gridSize *= 2
+			if gridSize > 1 {
+				gridSize = 1
 			}
 		}
 
@@ -206,10 +233,31 @@ func main() {
 		// clear background
 		window.FillRect(canvasMin, canvasMin, canvasSize, canvasSize, draw.White)
 
+		alignWithGrid := func(x float64) float64 {
+			return float64(int(x/gridSize+0.5)) * gridSize
+		}
+
 		if curX != nil && curY != nil {
 			mx, my := window.MousePosition()
 			sx, sy := mx-curMouseDx, my-curMouseDy
-			*curX, *curY = fromScreen(sx), fromScreen(sy)
+			x, y := fromScreen(sx), fromScreen(sy)
+			if useGrid {
+				x, y = alignWithGrid(x), alignWithGrid(y)
+			}
+			*curX, *curY = x, y
+		}
+
+		// draw grid
+		if useGrid && !hideGrid {
+			gridColor := draw.RGB(0.9, 0.9, 1)
+			for x := gridSize; x < 1.0-gridSize/2; x += gridSize {
+				sx := toScreen(x)
+				window.DrawLine(sx, canvasMin, sx, canvasMin+canvasSize, gridColor)
+			}
+			for y := gridSize; y < 1.0-gridSize/2; y += gridSize {
+				sy := toScreen(y)
+				window.DrawLine(canvasMin, sy, canvasMin+canvasSize, sy, gridColor)
+			}
 		}
 
 		// draw draggable control points
@@ -240,7 +288,7 @@ func main() {
 						}
 					}
 				}
-				if !window.IsKeyDown(keyHideControlPoints) {
+				if !hideControlPoints {
 					window.FillRect(sx-m, sy-m, 1+2*m, 1+2*m, fill)
 					window.DrawRect(sx-m-1, sy-m-1, 3+2*m, 3+2*m, outline)
 				}
@@ -255,12 +303,12 @@ func main() {
 		}
 
 		// draw base line
-		if !window.IsKeyDown(keyHideBaseLine) {
+		if !hideBaseLine {
 			window.DrawLine(
 				canvasMin,
-				toScreen(2.0/3.0),
+				toScreen(baseLine),
 				canvasMin+canvasSize,
-				toScreen(2.0/3.0),
+				toScreen(baseLine),
 				draw.Purple,
 			)
 		}
@@ -315,7 +363,7 @@ func main() {
 			}
 		}
 
-		if !window.IsKeyDown(keyHideFrame) {
+		if !hideFrame {
 			window.DrawRect(
 				canvasMin-1,
 				canvasMin-1,
