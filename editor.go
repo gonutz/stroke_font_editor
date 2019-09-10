@@ -1,9 +1,17 @@
 package main
 
 import (
+	"bytes"
+	"encoding/binary"
+	"encoding/json"
+	"errors"
 	"fmt"
-	"github.com/gonutz/prototype/draw"
+	"io/ioutil"
 	"math"
+	"os"
+	"path/filepath"
+
+	"github.com/gonutz/prototype/draw"
 )
 
 func main() {
@@ -18,10 +26,10 @@ func main() {
 	hideFrame := false
 	hideGrid := false
 
-	type penShape string
+	type penShape int
 	const (
-		rectangular penShape = "rect"
-		circular    penShape = "round"
+		rectangular penShape = iota
+		circular
 	)
 
 	pen := circular
@@ -40,6 +48,38 @@ func main() {
 		curMouseDx int
 		curMouseDy int
 	)
+
+	lastPath := filepath.Join(os.Getenv("APPDATA"), "stroke_font_editor.stf")
+	if s, err := load(lastPath); err == nil {
+		shape = s
+	}
+	defer func() { save(shape, lastPath) }()
+
+	settingsPath := filepath.Join(os.Getenv("APPDATA"), "stroke_font_editor.set")
+	defer func() {
+		saveAppSettings(appSettings{
+			Letter:            letter,
+			PenShape:          int(pen),
+			PenSize:           penSize,
+			UseGrid:           useGrid,
+			GridSize:          gridSize,
+			HideControlPoints: hideControlPoints,
+			HideBaseLine:      hideBaseLine,
+			HideFrame:         hideFrame,
+			HideGrid:          hideGrid,
+		}, settingsPath)
+	}()
+	if s, err := loadAppSettings(settingsPath); err == nil {
+		letter = s.Letter
+		pen = penShape(s.PenShape)
+		penSize = s.PenSize
+		useGrid = s.UseGrid
+		gridSize = s.GridSize
+		hideControlPoints = s.HideControlPoints
+		hideBaseLine = s.HideBaseLine
+		hideFrame = s.HideFrame
+		hideGrid = s.HideGrid
+	}
 
 	const windowW, windowH = 960, 800
 	check(draw.RunWindow("Stroke Font Editor", windowW, windowH, func(window draw.Window) {
@@ -359,7 +399,7 @@ func main() {
 					}
 				}
 			default:
-				panic("wat stroke type? " + stroke.typ)
+				panic("wat stroke type?")
 			}
 		}
 
@@ -390,10 +430,124 @@ type stroke struct {
 	x3, y3 float64
 }
 
-type strokeType string
+type strokeType byte
 
 const (
-	dot   strokeType = "dot"
-	line  strokeType = "line"
-	curve strokeType = "curve"
+	dot strokeType = iota
+	line
+	curve
 )
+
+const fileVersion = 1
+
+func save(s strokes, path string) error {
+	var buf bytes.Buffer
+	w := &buf
+
+	w.WriteByte(fileVersion)
+
+	p := func(x, y float64) {
+		binary.Write(w, binary.LittleEndian, float32(x))
+		binary.Write(w, binary.LittleEndian, float32(y))
+	}
+
+	for _, s := range s {
+		w.WriteByte(byte(s.typ))
+		p(s.x1, s.y1)
+		if s.typ != dot {
+			p(s.x2, s.y2)
+		}
+		if s.typ == curve {
+			p(s.x3, s.y3)
+		}
+	}
+
+	return ioutil.WriteFile(path, buf.Bytes(), 0666)
+}
+
+func load(path string) (strokes, error) {
+	data, err := ioutil.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
+		return nil, errors.New("empty file, need a file version")
+	}
+	skip := func(n int) {
+		data = data[n:]
+	}
+	version := data[0]
+	if version > fileVersion {
+		return nil, errors.New("file version is higher than the one I know")
+	}
+	skip(1)
+
+	p := func() (x, y float64) {
+		var x32, y32 float32
+		r := bytes.NewReader(data)
+		binary.Read(r, binary.LittleEndian, &x32)
+		binary.Read(r, binary.LittleEndian, &y32)
+		skip(8)
+		return float64(x32), float64(y32)
+	}
+
+	var strokes strokes
+	for len(data) > 0 {
+		s := stroke{typ: strokeType(data[0])}
+		skip(1)
+		switch s.typ {
+		case dot:
+			if len(data) < 8 {
+				return nil, errors.New("dot needs 1 point")
+			}
+			s.x1, s.y1 = p()
+		case line:
+			if len(data) < 16 {
+				return nil, errors.New("dot needs 2 points")
+			}
+			s.x1, s.y1 = p()
+			s.x2, s.y2 = p()
+		case curve:
+			if len(data) < 24 {
+				return nil, errors.New("dot needs 3 points")
+			}
+			s.x1, s.y1 = p()
+			s.x2, s.y2 = p()
+			s.x3, s.y3 = p()
+		default:
+			return nil, errors.New("file contains unknown stroke type")
+		}
+		strokes = append(strokes, s)
+	}
+	return strokes, nil
+}
+
+type appSettings struct {
+	Letter            rune
+	PenShape          int
+	PenSize           int
+	UseGrid           bool
+	GridSize          float64
+	HideControlPoints bool
+	HideBaseLine      bool
+	HideFrame         bool
+	HideGrid          bool
+}
+
+func saveAppSettings(s appSettings, path string) error {
+	data, err := json.Marshal(&s)
+	if err != nil {
+		return err
+	}
+	return ioutil.WriteFile(path, data, 0666)
+}
+
+func loadAppSettings(path string) (appSettings, error) {
+	var s appSettings
+	data, err := ioutil.ReadFile(path)
+	if err != nil {
+		return s, err
+	}
+	err = json.Unmarshal(data, &s)
+	return s, err
+}
