@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/gonutz/prototype/draw"
 )
@@ -42,7 +44,7 @@ func main() {
 	useGrid := true
 
 	var (
-		letter              rune
+		curLetter           rune
 		shape               strokes
 		curX, curY          *float64
 		curMouseDx          int
@@ -59,7 +61,7 @@ func main() {
 	settingsPath := filepath.Join(os.Getenv("APPDATA"), "stroke_font_editor.set")
 	defer func() {
 		saveAppSettings(appSettings{
-			Letter:            letter,
+			Letter:            curLetter,
 			PenShape:          int(pen),
 			PenSize:           penSize,
 			UseGrid:           useGrid,
@@ -71,7 +73,7 @@ func main() {
 		}, settingsPath)
 	}()
 	if s, err := loadAppSettings(settingsPath); err == nil {
-		letter = s.Letter
+		curLetter = s.Letter
 		pen = penShape(s.PenShape)
 		penSize = s.PenSize
 		useGrid = s.UseGrid
@@ -86,6 +88,20 @@ func main() {
 	check(draw.RunWindow("Stroke Font Editor", windowW, windowH, func(window draw.Window) {
 		if window.WasKeyPressed(draw.KeyEscape) {
 			window.Close()
+		}
+
+		if window.WasKeyPressed(draw.KeyE) &&
+			(window.IsKeyDown(draw.KeyLeftControl) ||
+				window.IsKeyDown(draw.KeyRightControl)) {
+			exportFile(letters{letter{r: curLetter, shape: shape}}, "font.stf")
+		}
+
+		if window.WasKeyPressed(draw.KeyI) &&
+			(window.IsKeyDown(draw.KeyLeftControl) ||
+				window.IsKeyDown(draw.KeyRightControl)) {
+			l, err := importFile("font.stf")
+			check(err)
+			fmt.Printf("%#v\n", l)
 		}
 
 		if !window.IsMouseDown(draw.LeftButton) {
@@ -141,19 +157,20 @@ func main() {
 			if len(s) > 0 {
 				mode = idle
 				for _, r := range s {
-					letter = r
+					curLetter = r
 					break
 				}
 			}
 			return
 		}
 
-		if button("Change Letter", windowW-buttonW-10, 40) {
+		if button("Change Letter", windowW-buttonW-10, 40) ||
+			window.WasKeyPressed(draw.KeyF2) {
 			mode = waitingForChar
 			return
 		}
 		window.DrawText(
-			"Letter: "+fmt.Sprint(letter)+" ("+string(letter)+")",
+			"Letter: "+fmt.Sprint(curLetter)+" ("+string(curLetter)+")",
 			windowW-buttonW-10, 10,
 			draw.White,
 		)
@@ -444,23 +461,6 @@ func check(err error) {
 	}
 }
 
-type strokes []stroke
-
-type stroke struct {
-	typ    strokeType
-	x1, y1 float64
-	x2, y2 float64
-	x3, y3 float64
-}
-
-type strokeType byte
-
-const (
-	dot strokeType = iota
-	line
-	curve
-)
-
 const fileVersion = 1
 
 func save(s strokes, path string) error {
@@ -574,3 +574,197 @@ func loadAppSettings(path string) (appSettings, error) {
 	err = json.Unmarshal(data, &s)
 	return s, err
 }
+
+const exportFileVersion = 1
+
+// exportFile's file format (little-endian encoding is used):
+//
+// 4 byte     ASCII "STRK" or 1263686739 as integer
+// 4 byte     file version
+// uint32     length of the following table in bytes
+// 	letter table, list of entries:
+// uint32     unicode character
+// uint32     offset into the data section where the shape is defined
+// uint32     number of strokes for this character
+// 	data section, list of shapes:
+// 6 float32  x1, y1, x2, y2, x3, y3:
+//            these describe a bezier curve from x1,y1 to x3,y3 with control
+//            point x2,y2.
+//            If all points are the same, they describe a single dot.
+//            If the last two points are the same, points 1 and 2 describe a
+//            straight line.
+func exportFile(list letters, path string) error {
+	var buf bytes.Buffer
+	w := &buf
+	enc := binary.LittleEndian
+
+	// magic number and file version
+	w.WriteString("STRK")
+	binary.Write(w, enc, uint32(exportFileVersion))
+
+	// table with offsets for letter shapes
+	binary.Write(w, enc, uint32(3*4*len(list))) // table length in bytes
+	sort.Sort(list)
+	var offset uint32
+	for _, l := range list {
+		binary.Write(w, enc, uint32(l.r))
+		binary.Write(w, enc, offset)
+		binary.Write(w, enc, uint32(len(l.shape)))
+		offset += uint32(3 * 2 * 4 * len(l.shape))
+	}
+
+	// shapes back to back as described in the above table
+	for _, l := range list {
+		for _, s := range l.shape {
+			switch s.typ {
+			case dot:
+				binary.Write(w, enc, float32(s.x1))
+				binary.Write(w, enc, float32(s.y1))
+				binary.Write(w, enc, float32(s.x1))
+				binary.Write(w, enc, float32(s.y1))
+				binary.Write(w, enc, float32(s.x1))
+				binary.Write(w, enc, float32(s.y1))
+			case line:
+				fmt.Println(
+					"exporting line",
+					float32(s.x1),
+					float32(s.y1),
+					float32(s.x2),
+					float32(s.y2),
+					float32(s.x2),
+					float32(s.y2),
+				)
+				binary.Write(w, enc, float32(s.x1))
+				binary.Write(w, enc, float32(s.y1))
+				binary.Write(w, enc, float32(s.x2))
+				binary.Write(w, enc, float32(s.y2))
+				binary.Write(w, enc, float32(s.x2))
+				binary.Write(w, enc, float32(s.y2))
+			case curve:
+				binary.Write(w, enc, float32(s.x1))
+				binary.Write(w, enc, float32(s.y1))
+				binary.Write(w, enc, float32(s.x2))
+				binary.Write(w, enc, float32(s.y2))
+				binary.Write(w, enc, float32(s.x3))
+				binary.Write(w, enc, float32(s.y3))
+			default:
+				panic("what typ?")
+			}
+		}
+	}
+
+	return ioutil.WriteFile(path, buf.Bytes(), 0666)
+}
+
+func importFile(path string) (letters, error) {
+	data, err := ioutil.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	r := &errReader{Reader: bytes.NewReader(data)}
+	enc := binary.LittleEndian
+
+	// check file magic and version
+	var magic [4]byte
+	binary.Read(r, enc, &magic)
+	if string(magic[:]) != "STRK" {
+		return nil, errors.New("STRK expected as magic number at file start")
+	}
+
+	var version uint32
+	binary.Read(r, enc, &version)
+	if version != exportFileVersion {
+		return nil, errors.New("wrong file version")
+	}
+
+	// read character-to-stroke-offset table
+	var headerSize uint32
+	binary.Read(r, enc, &headerSize)
+	type entry struct {
+		Char   uint32
+		Offset uint32
+		N      uint32
+	}
+	table := make([]entry, headerSize/8)
+	binary.Read(r, enc, &table)
+
+	// read shapes
+	var list letters
+	for _, e := range table {
+		shape := make(strokes, e.N)
+		for i := range shape {
+			var x1, y1, x2, y2, x3, y3 float32
+			binary.Read(r, enc, &x1)
+			binary.Read(r, enc, &y1)
+			binary.Read(r, enc, &x2)
+			binary.Read(r, enc, &y2)
+			binary.Read(r, enc, &x3)
+			binary.Read(r, enc, &y3)
+
+			shape[i].typ = curve
+			if x1 == x2 && y1 == y2 &&
+				x1 == x3 && y1 == y3 {
+				shape[i].typ = dot
+			} else if x2 == x3 && y2 == y3 {
+				shape[i].typ = line
+			}
+			shape[i].x1 = float64(x1)
+			shape[i].y1 = float64(y1)
+			shape[i].x2 = float64(x2)
+			shape[i].y2 = float64(y2)
+			shape[i].x3 = float64(x3)
+			shape[i].y3 = float64(y3)
+		}
+		list = append(list, letter{
+			r:     rune(e.Char),
+			shape: shape,
+		})
+	}
+
+	if r.err != nil && r.err != io.EOF {
+		return nil, err
+	}
+	return list, nil
+}
+
+type errReader struct {
+	io.Reader
+	err error
+}
+
+func (r *errReader) Read(p []byte) (n int, err error) {
+	if r.err != nil {
+		return 0, r.err
+	}
+	n, err = r.Reader.Read(p)
+	r.err = err
+	return
+}
+
+type letters []letter
+
+type letter struct {
+	r     rune
+	shape strokes
+}
+
+func (x letters) Len() int           { return len(x) }
+func (x letters) Less(i, j int) bool { return x[i].r < x[j].r }
+func (x letters) Swap(i, j int)      { x[i], x[j] = x[j], x[i] }
+
+type strokes []stroke
+
+type stroke struct {
+	typ    strokeType
+	x1, y1 float64
+	x2, y2 float64
+	x3, y3 float64
+}
+
+type strokeType byte
+
+const (
+	dot strokeType = iota
+	line
+	curve
+)
