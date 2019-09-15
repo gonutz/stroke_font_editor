@@ -46,17 +46,12 @@ func main() {
 	var (
 		curLetter           rune
 		shape               strokes
+		allLetters          = make(map[rune]strokes)
 		curX, curY          *float64
 		curMouseDx          int
 		curMouseDy          int
 		mouseInDeletionArea bool
 	)
-
-	lastPath := filepath.Join(os.Getenv("APPDATA"), "stroke_font_editor.stf")
-	if s, err := load(lastPath); err == nil {
-		shape = s
-	}
-	defer func() { save(shape, lastPath) }()
 
 	settingsPath := filepath.Join(os.Getenv("APPDATA"), "stroke_font_editor.set")
 	defer func() {
@@ -84,6 +79,24 @@ func main() {
 		hideGrid = s.HideGrid
 	}
 
+	lastPath := filepath.Join(os.Getenv("APPDATA"), "stroke_font_editor.stf")
+	if l, err := importFile(lastPath); err == nil {
+		allLetters = make(map[rune]strokes)
+		for i := range l {
+			allLetters[l[i].r] = l[i].shape
+		}
+		shape = make(strokes, len(allLetters[curLetter]))
+		copy(shape, allLetters[curLetter])
+	}
+	defer func() {
+		allLetters[curLetter] = shape
+		var l letters
+		for r, s := range allLetters {
+			l = append(l, letter{r: r, shape: s})
+		}
+		exportFile(l, lastPath)
+	}()
+
 	const windowW, windowH = 960, 800
 	check(draw.RunWindow("Stroke Font Editor", windowW, windowH, func(window draw.Window) {
 		if window.WasKeyPressed(draw.KeyEscape) {
@@ -93,15 +106,11 @@ func main() {
 		if window.WasKeyPressed(draw.KeyE) &&
 			(window.IsKeyDown(draw.KeyLeftControl) ||
 				window.IsKeyDown(draw.KeyRightControl)) {
-			exportFile(letters{letter{r: curLetter, shape: shape}}, "font.stf")
-		}
-
-		if window.WasKeyPressed(draw.KeyI) &&
-			(window.IsKeyDown(draw.KeyLeftControl) ||
-				window.IsKeyDown(draw.KeyRightControl)) {
-			l, err := importFile("font.stf")
-			check(err)
-			fmt.Printf("%#v\n", l)
+			var l letters
+			for r, s := range allLetters {
+				l = append(l, letter{r: r, shape: s})
+			}
+			exportFile(l, "font.stf")
 		}
 
 		if !window.IsMouseDown(draw.LeftButton) {
@@ -157,7 +166,13 @@ func main() {
 			if len(s) > 0 {
 				mode = idle
 				for _, r := range s {
+					allLetters[curLetter] = make(strokes, len(shape))
+					copy(allLetters[curLetter], shape)
+
 					curLetter = r
+
+					shape = make(strokes, len(allLetters[curLetter]))
+					copy(shape, allLetters[curLetter])
 					break
 				}
 			}
@@ -625,15 +640,6 @@ func exportFile(list letters, path string) error {
 				binary.Write(w, enc, float32(s.x1))
 				binary.Write(w, enc, float32(s.y1))
 			case line:
-				fmt.Println(
-					"exporting line",
-					float32(s.x1),
-					float32(s.y1),
-					float32(s.x2),
-					float32(s.y2),
-					float32(s.x2),
-					float32(s.y2),
-				)
 				binary.Write(w, enc, float32(s.x1))
 				binary.Write(w, enc, float32(s.y1))
 				binary.Write(w, enc, float32(s.x2))
@@ -685,7 +691,7 @@ func importFile(path string) (letters, error) {
 		Offset uint32
 		N      uint32
 	}
-	table := make([]entry, headerSize/8)
+	table := make([]entry, headerSize/12)
 	binary.Read(r, enc, &table)
 
 	// read shapes
