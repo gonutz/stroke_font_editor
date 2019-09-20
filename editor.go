@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 
 	"github.com/gonutz/prototype/draw"
 )
@@ -20,6 +21,7 @@ func main() {
 	const (
 		idle = iota
 		waitingForChar
+		copyingChar
 	)
 	mode := idle
 
@@ -106,6 +108,7 @@ func main() {
 		if window.WasKeyPressed(draw.KeyE) &&
 			(window.IsKeyDown(draw.KeyLeftControl) ||
 				window.IsKeyDown(draw.KeyRightControl)) {
+			allLetters[curLetter] = shape
 			var l letters
 			for r, s := range allLetters {
 				l = append(l, letter{r: r, shape: s})
@@ -179,9 +182,30 @@ func main() {
 			return
 		}
 
+		if mode == copyingChar {
+			window.DrawText("Enter the letter to copy", 100, 100, draw.White)
+			s := window.Characters()
+			if len(s) > 0 {
+				mode = idle
+				for _, r := range s {
+					orig := allLetters[r]
+					allLetters[curLetter] = make(strokes, len(orig))
+					copy(allLetters[curLetter], orig)
+					shape = make(strokes, len(allLetters[curLetter]))
+					copy(shape, allLetters[curLetter])
+					break
+				}
+			}
+			return
+		}
+
 		if button("Change Letter", windowW-buttonW-10, 40) ||
 			window.WasKeyPressed(draw.KeyF2) {
 			mode = waitingForChar
+			return
+		}
+		if button("Copy Letter", windowW-buttonW-10, 80) {
+			mode = copyingChar
 			return
 		}
 		window.DrawText(
@@ -409,11 +433,14 @@ func main() {
 		}
 
 		// draw letter
-		for _, stroke := range shape {
+		for i, stroke := range shape {
 			switch stroke.typ {
 			case dot:
 				x, y := toScreen(stroke.x1), toScreen(stroke.y1)
 				drawDot(x-penSize/2, y-penSize/2, penSize, penSize, draw.Black)
+				if !hideControlPoints {
+					window.DrawText(strconv.Itoa(i), x, y, draw.DarkGreen)
+				}
 			case line:
 				step := 1.0 / (canvasSize * math.Hypot(stroke.x1-stroke.x2, stroke.y1-stroke.y2))
 				curT := 0.0
@@ -429,6 +456,11 @@ func main() {
 					if curT >= 1 {
 						break
 					}
+				}
+				if !hideControlPoints {
+					x := toScreen((stroke.x1 + stroke.x2) / 2)
+					y := toScreen((stroke.y1 + stroke.y2) / 2)
+					window.DrawText(strconv.Itoa(i), x, y, draw.DarkGreen)
 				}
 			case curve:
 				interp := func(t float64) (x, y float64) {
@@ -453,8 +485,13 @@ func main() {
 						break
 					}
 				}
+				if !hideControlPoints {
+					x := toScreen((stroke.x1 + stroke.x2) / 2)
+					y := toScreen((stroke.y1 + stroke.y2) / 2)
+					window.DrawText(strconv.Itoa(i), x, y, draw.DarkGreen)
+				}
 			default:
-				panic("wat stroke type?")
+				panic("unknown stroke type")
 			}
 		}
 
@@ -609,6 +646,8 @@ const exportFileVersion = 1
 //            If the last two points are the same, points 1 and 2 describe a
 //            straight line.
 func exportFile(list letters, path string) error {
+	list = simplify(list)
+
 	var buf bytes.Buffer
 	w := &buf
 	enc := binary.LittleEndian
@@ -654,12 +693,182 @@ func exportFile(list letters, path string) error {
 				binary.Write(w, enc, float32(s.x3))
 				binary.Write(w, enc, float32(s.y3))
 			default:
-				panic("what typ?")
+				panic("unknown stroke type")
 			}
 		}
 	}
 
 	return ioutil.WriteFile(path, buf.Bytes(), 0666)
+}
+
+func simplify(list letters) letters {
+	var out letters
+	for _, l := range list {
+		if len(l.shape) > 0 {
+			out = append(out, letter{r: l.r, shape: linearize(l.shape)})
+		}
+	}
+	return out
+}
+
+// linearize reorders strokes in a way that allows the stroke to continue for as
+// long as possible. An 'S' for example is made up of multiple bezier curves.
+// combineStrokes will order them in a way that they start at one end and go all
+// the way to the other end in one go.
+func linearize(shape strokes) strokes {
+	var nodes []*node
+	var edges []*edge
+
+	addNode := func(p [2]float64) *node {
+		for i := range nodes {
+			if p == nodes[i].pos {
+				return nodes[i]
+			}
+		}
+		nodes = append(nodes, &node{pos: p})
+		return nodes[len(nodes)-1]
+	}
+
+	for i, s := range shape {
+		edges = append(edges, &edge{
+			name: i,
+			a:    addNode(s.start()),
+			b:    addNode(s.end()),
+		})
+	}
+
+	// connect nodes to all their edges
+	for _, e := range edges {
+		if !containsEdge(e.a.edges, e) {
+			e.a.edges = append(e.a.edges, e)
+		}
+		if !containsEdge(e.b.edges, e) {
+			e.b.edges = append(e.b.edges, e)
+		}
+	}
+
+	sort.Sort(byY(nodes))
+	sort.Stable(byX(nodes))
+	sort.Stable(byEdgeCount(nodes))
+
+	var walkLongest func(n *node) []*edge
+	walkLongest = func(n *node) []*edge {
+		var paths [][]*edge
+		for _, e := range n.edges {
+			if !e.visited {
+				e.visited = true
+				if n.pos != e.a.pos {
+					paths = append(paths, append([]*edge{e}, walkLongest(e.a)...))
+				} else {
+					paths = append(paths, append([]*edge{e}, walkLongest(e.b)...))
+				}
+				e.visited = false
+			}
+		}
+		var longest []*edge
+		maxLen := 0
+		for _, path := range paths {
+			if len(path) > maxLen {
+				maxLen = len(path)
+				longest = path
+			}
+		}
+		return longest
+	}
+
+	var path []*edge
+	for _, e := range edges {
+		if !e.visited {
+			e.visited = true
+
+			aPath := walkLongest(e.a)
+			for _, e := range aPath {
+				e.visited = true
+			}
+
+			bPath := walkLongest(e.b)
+			for _, e := range bPath {
+				e.visited = true
+			}
+
+			for i := len(aPath) - 1; i >= 0; i-- {
+				path = append(path, aPath[i])
+			}
+			path = append(path, e)
+			for i := range bPath {
+				path = append(path, bPath[i])
+			}
+		}
+	}
+
+	ordered := make(strokes, len(shape))
+	for i, e := range path {
+		ordered[i] = shape[e.name]
+	}
+
+	flipToFit := func(a, b *stroke, flipA, flipB bool) (aFlipped, bFlipped bool) {
+		if a.end() == b.start() {
+			// this is what we want
+			return false, false
+		} else if a.end() == b.end() && flipB {
+			b.flip()
+			return false, true
+		} else if a.start() == b.start() && flipA {
+			a.flip()
+			return true, false
+		} else if a.start() == b.end() && flipA && flipB {
+			a.flip()
+			b.flip()
+			return true, true
+		}
+		return false, false
+	}
+	if len(ordered) > 1 {
+		_, flippedB := flipToFit(&ordered[0], &ordered[1], true, true)
+		for i := 1; i < len(ordered); i++ {
+			_, flippedB = flipToFit(&ordered[i-1], &ordered[i], !flippedB, true)
+		}
+	}
+
+	return ordered
+}
+
+type edge struct {
+	name    int
+	a, b    *node
+	visited bool
+}
+
+type node struct {
+	pos   [2]float64
+	edges []*edge
+}
+
+type byX []*node
+
+func (x byX) Len() int           { return len(x) }
+func (x byX) Less(i, j int) bool { return x[i].pos[0] < x[j].pos[0] }
+func (x byX) Swap(i, j int)      { x[i], x[j] = x[j], x[i] }
+
+type byY []*node
+
+func (x byY) Len() int           { return len(x) }
+func (x byY) Less(i, j int) bool { return x[i].pos[1] < x[j].pos[1] }
+func (x byY) Swap(i, j int)      { x[i], x[j] = x[j], x[i] }
+
+type byEdgeCount []*node
+
+func (x byEdgeCount) Len() int           { return len(x) }
+func (x byEdgeCount) Less(i, j int) bool { return len(x[i].edges) < len(x[j].edges) }
+func (x byEdgeCount) Swap(i, j int)      { x[i], x[j] = x[j], x[i] }
+
+func containsEdge(edges []*edge, e *edge) bool {
+	for i := range edges {
+		if edges[i] == e {
+			return true
+		}
+	}
+	return false
 }
 
 func importFile(path string) (letters, error) {
@@ -774,3 +983,35 @@ const (
 	line
 	curve
 )
+
+func (s *stroke) start() [2]float64 {
+	return [2]float64{s.x1, s.y1}
+}
+
+func (s *stroke) end() [2]float64 {
+	switch s.typ {
+	case dot:
+		return [2]float64{s.x1, s.y1}
+	case line:
+		return [2]float64{s.x2, s.y2}
+	case curve:
+		return [2]float64{s.x3, s.y3}
+	default:
+		panic("unknown stroke type")
+	}
+}
+
+func (s *stroke) flip() {
+	switch s.typ {
+	case dot:
+		return
+	case line:
+		s.x1, s.x2 = s.x2, s.x1
+		s.y1, s.y2 = s.y2, s.y1
+	case curve:
+		s.x1, s.x3 = s.x3, s.x1
+		s.y1, s.y3 = s.y3, s.y1
+	default:
+		panic("unknown stroke type")
+	}
+}
